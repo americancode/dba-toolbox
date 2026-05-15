@@ -1,0 +1,425 @@
+name: Backup Image
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*.*.*"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-scan-publish:
+    name: Build, Scan, Publish
+    runs-on: ubuntu-latest
+    outputs:
+      published-digest: ${{ steps.build-and-push.outputs.digest }}
+      published-tags: ${{ steps.meta.outputs.tags }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      security-events: write
+
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@v0.2.6
+        with:
+          trivy-version: v0.70.0
+
+      - name: Scan Source Files
+        uses: aquasecurity/trivy-action@v0.35.0
+        with:
+          skip-setup-trivy: true
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-fs.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 0
+          skip-dirs: |
+            .git
+            .github
+
+      - name: Upload Source Scan SARIF
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && hashFiles('trivy-fs.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+      - name: Install Cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3.9.0
+        with:
+          cosign-release: "v2.4.1"
+
+      - name: Set Up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log In to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate Image Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=ref,event=tag
+            type=sha
+
+      - name: Build Local Scan Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          load: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:scan
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan Local Image
+        uses: aquasecurity/trivy-action@v0.35.0
+        with:
+          skip-setup-trivy: true
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:scan
+          format: sarif
+          output: trivy-image.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          vuln-type: os,library
+          exit-code: 1
+
+      - name: Upload Image Scan SARIF
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && hashFiles('trivy-image.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+      - name: Publish Image
+        id: build-and-push
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Sign Published Image
+        if: github.event_name != 'pull_request'
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build-and-push.outputs.digest }}
+        run: |
+          echo "${TAGS}" | xargs -I {} cosign sign --yes {}@${DIGEST}
+
+  prune-registry:
+    name: Prune GHCR Images and Artifacts
+    runs-on: ubuntu-latest
+    needs: build-scan-publish
+    if: ${{ github.event_name != 'pull_request' }}
+    permissions:
+      packages: write
+
+    steps:
+      - name: Install ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Log In to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete Old Image and Artifact Versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY: ${{ env.REGISTRY }}
+          OWNER: ${{ github.repository_owner }}
+          PACKAGE_NAME: ${{ github.event.repository.name }}
+          KEEP_SEMVER_COUNT: "5"
+          CURRENT_DIGEST: ${{ needs.build-scan-publish.outputs.published-digest }}
+          CURRENT_TAGS: ${{ needs.build-scan-publish.outputs.published-tags }}
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          import time
+
+          registry = os.environ["REGISTRY"]
+          owner = os.environ["OWNER"]
+          package = os.environ["PACKAGE_NAME"]
+          image = f"{registry}/{owner}/{package}"
+          keep_semver_count = int(os.environ.get("KEEP_SEMVER_COUNT", "5"))
+          max_passes = 5
+          current_digest = os.environ.get("CURRENT_DIGEST", "")
+          current_digest_hex = current_digest.split(":", 1)[1] if current_digest.startswith("sha256:") else ""
+          current_tags = {line.strip().rsplit(":", 1)[-1] for line in os.environ.get("CURRENT_TAGS", "").splitlines() if line.strip()}
+
+          semver_re = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
+          artifact_re = re.compile(r"^sha256-([0-9a-f]{64})\..+$")
+
+          def gh_api(path, method="GET"):
+              cmd = [
+                  "gh",
+                  "api",
+                  "-H",
+                  "Accept: application/vnd.github+json",
+                  "-H",
+                  "X-GitHub-Api-Version: 2022-11-28",
+              ]
+              if method != "GET":
+                  cmd.extend(["-X", method])
+              cmd.append(path)
+              return subprocess.run(cmd, text=True, capture_output=True)
+
+          def api_base():
+              org_probe = gh_api(f"/orgs/{owner}")
+              if org_probe.returncode == 0:
+                  return f"/orgs/{owner}/packages/container/{package}/versions"
+              user_probe = gh_api(f"/users/{owner}")
+              if user_probe.returncode == 0:
+                  return f"/users/{owner}/packages/container/{package}/versions"
+              print(f"Unable to identify package owner type for {owner}", file=sys.stderr)
+              print(org_probe.stderr, file=sys.stderr)
+              print(user_probe.stderr, file=sys.stderr)
+              raise SystemExit(1)
+
+          def list_versions(base):
+              versions = []
+              page = 1
+              while True:
+                  res = gh_api(f"{base}?per_page=100&page={page}")
+                  if res.returncode != 0:
+                      print(res.stderr, file=sys.stderr)
+                      raise SystemExit(res.returncode)
+                  batch = json.loads(res.stdout)
+                  if not batch:
+                      break
+                  versions.extend(batch)
+                  page += 1
+              return versions
+
+          def tags_for(version):
+              return version.get("metadata", {}).get("container", {}).get("tags", []) or []
+
+          def digest_hex(version):
+              name = version.get("name", "")
+              if name.startswith("sha256:"):
+                  return name.split(":", 1)[1]
+              return ""
+
+          def digest_ref_hex(digest):
+              return digest.split(":", 1)[1] if digest.startswith("sha256:") else ""
+
+          def semver_key(tag):
+              if tag.startswith("v"):
+                  tag = tag[1:]
+              main, _, build = tag.partition("+")
+              core, sep, pre = main.partition("-")
+              nums = tuple(int(part) for part in core.split("."))
+              pre_key = (1, "") if not sep else (0, pre)
+              return nums, pre_key, build
+
+          def classify(versions):
+              semver_tags = sorted(
+                  {tag for version in versions for tag in tags_for(version) if semver_re.match(tag)},
+                  key=semver_key,
+                  reverse=True,
+              )
+              keep_semver_tags = set(semver_tags[:keep_semver_count])
+
+              keep_image_digests = set()
+              keep_version_ids = set()
+              artifact_subjects = {}
+              keep_ref_tags = set()
+
+              for version in versions:
+                  tags = set(tags_for(version))
+                  digest = digest_hex(version)
+                  is_current_digest = bool(current_digest_hex) and digest == current_digest_hex
+                  if is_current_digest or "main" in tags or tags.intersection(keep_semver_tags) or tags.intersection(current_tags):
+                      keep_version_ids.add(version["id"])
+                      keep_ref_tags.update(tags.intersection({"main"} | keep_semver_tags | current_tags))
+                      if digest:
+                          keep_image_digests.add(digest)
+                      if is_current_digest:
+                          keep_image_digests.add(digest)
+
+              for tag in sorted(keep_ref_tags):
+                  add_referenced_manifest_digests(f"{image}:{tag}", keep_image_digests)
+
+              for version in versions:
+                  digest = digest_hex(version)
+                  if digest and digest in keep_image_digests:
+                      keep_version_ids.add(version["id"])
+
+              for version in versions:
+                  for tag in tags_for(version):
+                      match = artifact_re.match(tag)
+                      if match:
+                          artifact_subjects.setdefault(version["id"], set()).add(match.group(1))
+
+              for version in versions:
+                  subjects = artifact_subjects.get(version["id"], set())
+                  if subjects and subjects.intersection(keep_image_digests):
+                      keep_version_ids.add(version["id"])
+
+              return keep_semver_tags, keep_image_digests, keep_version_ids, artifact_subjects
+
+          def delete_order(version, artifact_subjects):
+              tags = tags_for(version)
+              if version["id"] in artifact_subjects:
+                  return 0
+              if not tags:
+                  return 1
+              return 2
+
+          def delete_ref_with_oras(ref):
+              return subprocess.run(
+                  ["oras", "manifest", "delete", "--force", ref],
+                  text=True,
+                  capture_output=True,
+              )
+
+          def fetch_manifest(ref):
+              res = subprocess.run(
+                  ["oras", "manifest", "fetch", ref],
+                  text=True,
+                  capture_output=True,
+              )
+              if res.returncode != 0:
+                  print(f"cleanup:manifest-fetch-failed ref={ref} error={res.stderr.strip() or res.stdout.strip() or res.returncode}", file=sys.stderr)
+                  return None
+              try:
+                  return json.loads(res.stdout)
+              except json.JSONDecodeError as err:
+                  print(f"cleanup:manifest-parse-failed ref={ref} error={err}", file=sys.stderr)
+                  return None
+
+          def add_referenced_manifest_digests(ref, keep_image_digests):
+              manifest = fetch_manifest(ref)
+              if not manifest:
+                  return
+              for desc in manifest.get("manifests", []) or []:
+                  digest = digest_ref_hex(desc.get("digest", ""))
+                  if digest:
+                      keep_image_digests.add(digest)
+
+          def delete_version(base, version_id):
+              return gh_api(f"{base}/{version_id}", method="DELETE")
+
+          base = api_base()
+          total_deleted = 0
+          final_kept = 0
+          failures = []
+          for cleanup_pass in range(1, max_passes + 1):
+              versions = list_versions(base)
+              keep_semver_tags, keep_image_digests, keep_version_ids, artifact_subjects = classify(versions)
+
+              print(f"cleanup:pass={cleanup_pass} package={owner}/{package} versions={len(versions)}")
+              print(f"cleanup:pass={cleanup_pass} keeping main and semver tags={','.join(sorted(keep_semver_tags, key=semver_key, reverse=True)) or '<none>'}")
+              print(f"cleanup:pass={cleanup_pass} keeping current digest={current_digest or '<none>'}")
+              print(f"cleanup:pass={cleanup_pass} keeping image digests={len(keep_image_digests)}")
+
+              deleted_this_pass = 0
+              kept_this_pass = 0
+              for version in sorted(versions, key=lambda item: delete_order(item, artifact_subjects)):
+                  version_id = version["id"]
+                  tags = tags_for(version)
+                  digest = version.get("name", "")
+                  if version_id in keep_version_ids:
+                      kept_this_pass += 1
+                      print(f"cleanup:keep pass={cleanup_pass} id={version_id} digest={digest} tags={','.join(tags) or '<untagged>'}")
+                      continue
+
+                  subjects = artifact_subjects.get(version_id, set())
+                  if subjects:
+                      reason = "stale-artifact"
+                  elif not tags:
+                      reason = "orphan-untagged"
+                  else:
+                      reason = "stale-image"
+
+                  subject_text = ",".join(sorted(subjects)) if subjects else "<none>"
+                  deleted = False
+                  errors = []
+
+                  for tag in tags:
+                      ref = f"{image}:{tag}"
+                      res = delete_ref_with_oras(ref)
+                      if res.returncode == 0:
+                          deleted = True
+                          print(f"cleanup:delete pass={cleanup_pass} method=oras reason={reason} id={version_id} ref={ref} digest={digest} subjects={subject_text}")
+                          break
+                      errors.append(f"oras {ref}: {res.stderr.strip() or res.stdout.strip() or res.returncode}")
+
+                  if not deleted and digest.startswith("sha256:"):
+                      ref = f"{image}@{digest}"
+                      res = delete_ref_with_oras(ref)
+                      if res.returncode == 0:
+                          deleted = True
+                          print(f"cleanup:delete pass={cleanup_pass} method=oras-digest reason={reason} id={version_id} ref={ref} digest={digest} subjects={subject_text}")
+                      else:
+                          errors.append(f"oras {ref}: {res.stderr.strip() or res.stdout.strip() or res.returncode}")
+
+                  if not deleted:
+                      res = delete_version(base, version_id)
+                      if res.returncode == 0:
+                          deleted = True
+                          print(f"cleanup:delete pass={cleanup_pass} method=github-api reason={reason} id={version_id} digest={digest} subjects={subject_text} tags={','.join(tags) or '<untagged>'}")
+                      else:
+                          errors.append(f"github-api status={res.returncode}: {res.stderr.strip() or res.stdout.strip()}")
+
+                  if deleted:
+                      deleted_this_pass += 1
+                      total_deleted += 1
+                  else:
+                      message = f"cleanup:delete-failed pass={cleanup_pass} reason={reason} id={version_id} digest={digest} subjects={subject_text} tags={','.join(tags) or '<untagged>'} errors={' | '.join(errors)}"
+                      print(message, file=sys.stderr)
+                      failures.append(message)
+
+              final_kept = kept_this_pass
+              print(f"cleanup:pass-done pass={cleanup_pass} kept={kept_this_pass} deleted={deleted_this_pass}")
+              if deleted_this_pass == 0:
+                  break
+              time.sleep(2)
+          else:
+              print("cleanup:warning max cleanup passes reached; run may need another pass")
+
+          print(f"cleanup:done kept={final_kept} deleted={total_deleted}")
+          if failures:
+              print(f"cleanup:warning delete failures={len(failures)}", file=sys.stderr)
+              for failure in failures:
+                  print(failure, file=sys.stderr)
+              raise SystemExit(1)
+          PY

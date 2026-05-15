@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: dba-toolbox
+  labels:
+    app.kubernetes.io/name: dba-toolbox
+spec:
+  replicas: 1
+  serviceName: dba-toolbox
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dba-toolbox
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dba-toolbox
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: toolbox
+          image: registry.example.com/backup-tools:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          envFrom:
+            - secretRef:
+                name: dba-toolbox-connections
+          volumeMounts:
+            - name: toolbox-work
+              mountPath: /backup
+  volumeClaimTemplates:
+    - metadata:
+        name: toolbox-work
+      spec:
+        accessModes:
+          - ReadWriteMany
+        storageClassName: rook-cephfs
+        resources:
+          requests:
+            storage: 100Gi

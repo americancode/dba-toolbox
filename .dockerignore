@@ -1,0 +1,7 @@
+.git
+.github
+.scan
+.DS_Store
+tmp
+*.log
+trivy-*.sarif
