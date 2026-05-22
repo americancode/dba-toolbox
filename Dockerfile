@@ -17,13 +17,8 @@ RUN apk upgrade --no-cache \
       tzdata \
     && addgroup -S -g 65532 backup \
     && adduser -S -D -H -u 65532 -G backup -h /home/backup -s /sbin/nologin backup \
-    && mkdir -p /backup /home/backup /usr/local/share/ca-certificates \
-    && chown -R backup:backup \
-      /backup \
-      /home/backup \
-      /etc/ssl/certs \
-      /usr/local/share/ca-certificates \
-    && chown backup:backup /etc/ca-certificates.conf \
+    && mkdir -p /backup /home/backup \
+    && chown -R backup:backup /backup /home/backup \
     && if command -v mcli >/dev/null 2>&1 && ! command -v mc >/dev/null 2>&1; then ln -s /usr/bin/mcli /usr/local/bin/mc; fi
 
 COPY scripts/toolbox-entrypoint.sh /usr/local/bin/toolbox-entrypoint.sh

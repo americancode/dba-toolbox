@@ -13,7 +13,6 @@ Kubernetes dynamically provisions the `/backup` volume through the
 - `mc` / `mcli`, the MinIO client
 - `psql`, `pg_dump`, and other PostgreSQL client tools
 - `tar`, `gzip`, `coreutils`, and timezone data
-- `update-ca-certificates` for loading custom CA bundles at runtime
 
 Azure CLI is intentionally not included.
 
@@ -182,24 +181,6 @@ Open a shell in the toolbox:
 
 ```sh
 kubectl exec -it statefulset/dba-toolbox -- bash
-```
-
-## Custom CAs
-
-The container runs as the non-root `backup` user. The image grants that user
-write access to Alpine's CA trust store so you can add certificates at runtime
-without changing users.
-
-Mount one or more PEM-encoded `.crt` files into:
-
-```text
-/usr/local/share/ca-certificates
-```
-
-Then refresh the trust store inside the pod:
-
-```sh
-update-ca-certificates
 ```
 
 ## Entrypoint Behavior
