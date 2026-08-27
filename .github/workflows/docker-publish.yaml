@@ -13,11 +13,34 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  validate:
+    name: Validate Chart and Entrypoint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Set Up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Lint Helm Chart
+        run: helm lint helm-charts/dba-toolbox
+
+      - name: Render Helm Chart
+        run: helm template dba-toolbox helm-charts/dba-toolbox >/dev/null
+
+      - name: Check Entrypoint Syntax
+        run: bash -n scripts/toolbox-entrypoint.sh
+
   build-scan-publish:
     name: Build, Scan, Publish
     runs-on: ubuntu-latest
+    needs: validate
     outputs:
-      published-digest: ${{ steps.build-and-push.outputs.digest }}
+      published-digest: ${{ steps.publish-image.outputs.digest }}
       published-tags: ${{ steps.meta.outputs.tags }}
     permissions:
       contents: read
@@ -35,19 +58,18 @@ jobs:
           trivy-version: v0.70.0
 
       - name: Scan Source Files
-        uses: aquasecurity/trivy-action@v0.35.0
-        with:
-          skip-setup-trivy: true
-          scan-type: fs
-          scan-ref: .
-          format: sarif
-          output: trivy-fs.sarif
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: 0
-          skip-dirs: |
-            .git
-            .github
+        run: |
+          trivy fs \
+            --scanners vuln \
+            --skip-files usr/local/bin/trivy \
+            --skip-dirs .git \
+            --skip-dirs .github \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --format sarif \
+            --output trivy-fs.sarif \
+            --exit-code 1 \
+            .
 
       - name: Upload Source Scan SARIF
         uses: github/codeql-action/upload-sarif@v4
@@ -91,22 +113,26 @@ jobs:
           file: Dockerfile
           push: false
           load: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:scan
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:quarantine-${{ github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Scan Local Image
-        uses: aquasecurity/trivy-action@v0.35.0
-        with:
-          skip-setup-trivy: true
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:scan
-          format: sarif
-          output: trivy-image.sarif
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          vuln-type: os,library
-          exit-code: 1
+      - name: Scan Quarantine Image
+        env:
+          QUARANTINE_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:quarantine-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          trivy image \
+            --scanners vuln \
+            --skip-files usr/local/bin/trivy \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --pkg-types os,library \
+            --format sarif \
+            --output trivy-image.sarif \
+            --exit-code 1 \
+            "${QUARANTINE_IMAGE}"
 
       - name: Upload Image Scan SARIF
         uses: github/codeql-action/upload-sarif@v4
@@ -116,23 +142,35 @@ jobs:
           category: trivy-image
 
       - name: Publish Image
-        id: build-and-push
+        id: publish-image
         if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+        env:
+          SOURCE_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:quarantine-${{ github.sha }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          published_digest=""
+          while IFS= read -r tag; do
+            [[ -n "${tag}" ]] || continue
+            docker tag "${SOURCE_IMAGE}" "${tag}"
+            docker push "${tag}" >/dev/null
+            repo_digest="$(docker image inspect "${tag}" --format='{{index .RepoDigests 0}}')"
+            digest="${repo_digest##*@}"
+            if [[ -z "${published_digest}" ]]; then
+              published_digest="${digest}"
+            elif [[ "${published_digest}" != "${digest}" ]]; then
+              echo "Published tag ${tag} resolved to ${digest}, expected ${published_digest}" >&2
+              exit 1
+            fi
+          done <<< "${TAGS}"
+          [[ -n "${published_digest}" ]] || { echo "No image tags were published" >&2; exit 1; }
+          echo "digest=${published_digest}" >> "${GITHUB_OUTPUT}"
 
       - name: Sign Published Image
         if: github.event_name != 'pull_request'
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
-          DIGEST: ${{ steps.build-and-push.outputs.digest }}
+          DIGEST: ${{ steps.publish-image.outputs.digest }}
         run: |
           echo "${TAGS}" | xargs -I {} cosign sign --yes {}@${DIGEST}
 

@@ -496,6 +496,27 @@ the chart, and publishes it to the GHCR OCI repository:
 oci://ghcr.io/<owner>/helm-charts/dba-toolbox
 ```
 
+The CI flow is:
+
+```text
+validate chart and shell
+        ↓
+build one local quarantine image
+        ↓
+Trivy source and image scans
+        ↓
+promote the exact scanned image digest to release tags
+        ↓
+sign the published image
+        ├── prune old image artifacts
+        └── publish the Helm chart for SemVer tags
+```
+
+Pull requests run validation and scans but do not publish. Branch pushes to
+`main` publish the image and run cleanup. Bare SemVer tag pushes additionally
+publish the matching Helm chart. The image is built only once; publishing
+retags and pushes the local image that already passed the Trivy scan.
+
 Install a published chart with:
 
 ```sh
