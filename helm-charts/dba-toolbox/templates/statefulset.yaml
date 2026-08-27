@@ -48,38 +48,61 @@ spec:
             {{- range $index, $name := keys .Values.connections.minio | sortAlpha }}
             {{- $connection := index $root.Values.connections.minio $name }}
             {{- if $connection.existingSecret.name }}
-            {{- range $field := list "endpoint" "accessKey" "secretKey" "bucket" }}
-            {{- $key := index $connection.existingSecret (printf "%sKey" $field) }}
-            {{- if $key }}
-            - name: MINIO_{{ $index }}_{{ upper (snakecase $field) }}
+            - name: MINIO_{{ $index }}_ENDPOINT
               valueFrom:
                 secretKeyRef:
                   name: {{ $connection.existingSecret.name | quote }}
-                  key: {{ $key | quote }}
-            {{- end }}
-            {{- end }}
+                  key: {{ default "endpoint" $connection.existingSecret.endpointKey | quote }}
+            - name: MINIO_{{ $index }}_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $connection.existingSecret.name | quote }}
+                  key: {{ default "accessKey" $connection.existingSecret.accessKeyKey | quote }}
+            - name: MINIO_{{ $index }}_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $connection.existingSecret.name | quote }}
+                  key: {{ default "secretKey" $connection.existingSecret.secretKeyKey | quote }}
+            - name: MINIO_{{ $index }}_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $connection.existingSecret.name | quote }}
+                  key: {{ default "bucket" $connection.existingSecret.bucketKey | quote }}
             {{- end }}
             {{- end }}
             {{- range $index, $name := keys .Values.connections.postgres | sortAlpha }}
             {{- $connection := index $root.Values.connections.postgres $name }}
             {{- if $connection.existingSecret.name }}
-            {{- range $field := list "host" "database" "user" "password" }}
-            {{- $key := index $connection.existingSecret (printf "%sKey" $field) }}
-            {{- if $key }}
-            - name: POSTGRES_{{ $index }}_{{ upper (snakecase $field) }}
+            {{- with $connection.existingSecret.hostKey }}
+            - name: POSTGRES_{{ $index }}_HOST
               valueFrom:
                 secretKeyRef:
                   name: {{ $connection.existingSecret.name | quote }}
-                  key: {{ $key | quote }}
+                  key: {{ . | quote }}
             {{- end }}
+            {{- if not $connection.existingSecret.connectingStringKey }}
+            - name: POSTGRES_{{ $index }}_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $connection.existingSecret.name | quote }}
+                  key: {{ default "database" $connection.existingSecret.databaseKey | quote }}
+            - name: POSTGRES_{{ $index }}_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $connection.existingSecret.name | quote }}
+                  key: {{ default "username" $connection.existingSecret.userKey | quote }}
+            - name: POSTGRES_{{ $index }}_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $connection.existingSecret.name | quote }}
+                  key: {{ default "password" $connection.existingSecret.passwordKey | quote }}
             {{- end }}
-            {{- $connectionStringKey := default $connection.connectionStringKey $connection.existingSecret.connectingStringKey }}
-            {{- if $connectionStringKey }}
+            {{- with $connection.existingSecret.connectingStringKey }}
             - name: POSTGRES_{{ $index }}_CONNECTION_STRING
               valueFrom:
                 secretKeyRef:
                   name: {{ $connection.existingSecret.name | quote }}
-                  key: {{ $connectionStringKey | quote }}
+                  key: {{ . | quote }}
             {{- end }}
             {{- end }}
             {{- end }}

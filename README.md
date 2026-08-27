@@ -298,6 +298,9 @@ namespace).
 
 An empty `existingSecret` object, or an object with an empty `name`, disables
 Secret-backed mapping for that connection and uses its regular values instead.
+When a Secret name is set, the default S3 keys are `endpoint`, `accessKey`,
+`secretKey`, and `bucket`; override them only when the Secret uses different
+names. The default PostgreSQL keys are `username`, `password`, and `database`.
 
 S3-compatible connection values are:
 
@@ -320,6 +323,14 @@ existingSecret:
   accessKeyKey: accessKey
   secretKeyKey: secretKey
   bucketKey: bucket
+```
+
+The key fields are optional when those defaults match the Secret. This is
+equivalent to the shorter form:
+
+```yaml
+existingSecret:
+  name: s3-credentials
 ```
 
 Use an S3 connection inside the pod as `mc ls primary-s3` or
@@ -348,6 +359,14 @@ existingSecret:
   userKey: username
   databaseKey: database
   connectingStringKey: connectionString
+```
+
+For the normal host/database/user/password form, only the `name` is needed
+when the Secret uses the default keys:
+
+```yaml
+existingSecret:
+  name: app-postgres-credentials
 ```
 
 `connectingStringKey` is optional. When present, the referenced value is used
