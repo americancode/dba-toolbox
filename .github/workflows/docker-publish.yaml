@@ -3,7 +3,7 @@ name: Backup Image
 on:
   push:
     branches: ["main"]
-    tags: ["v*.*.*"]
+    tags: ["*.*.*"]
   pull_request:
     branches: ["main"]
   workflow_dispatch:
@@ -423,3 +423,58 @@ jobs:
                   print(failure, file=sys.stderr)
               raise SystemExit(1)
           PY
+
+  publish-chart:
+    name: Package and Publish Helm Chart
+    runs-on: ubuntu-latest
+    needs: build-scan-publish
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Set Up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Verify Tag Matches Chart Version
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          chart_version="$(awk '$1 == "version:" {print $2; exit}' helm-charts/dba-toolbox/Chart.yaml)"
+          chart_app_version="$(awk '$1 == "appVersion:" {gsub(/"/, "", $2); print $2; exit}' helm-charts/dba-toolbox/Chart.yaml)"
+          if [[ ! "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag must be a bare semantic version such as 1.2.3: ${RELEASE_VERSION}" >&2
+            exit 1
+          fi
+          if [[ "${chart_version}" != "${RELEASE_VERSION}" ]]; then
+            echo "Chart version ${chart_version} does not match tag ${RELEASE_VERSION}" >&2
+            exit 1
+          fi
+          if [[ "${chart_app_version}" != "${RELEASE_VERSION}" ]]; then
+            echo "Chart appVersion ${chart_app_version} does not match tag ${RELEASE_VERSION}" >&2
+            exit 1
+          fi
+
+      - name: Lint Helm Chart
+        run: helm lint helm-charts/dba-toolbox
+
+      - name: Log In to GHCR for Helm
+        env:
+          CR_PAT: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "${CR_PAT}" | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
+
+      - name: Package Helm Chart
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: helm package helm-charts/dba-toolbox --version "${RELEASE_VERSION}" --app-version "${RELEASE_VERSION}"
+
+      - name: Publish Helm Chart
+        env:
+          CHART_REPOSITORY: oci://ghcr.io/${{ github.repository_owner }}/helm-charts
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: helm push "dba-toolbox-${RELEASE_VERSION}.tgz" "${CHART_REPOSITORY}"

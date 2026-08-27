@@ -1,0 +1,147 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "dba-toolbox.fullname" . }}
+  labels:
+    {{- include "dba-toolbox.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "dba-toolbox.fullname" . }}
+  replicas: {{ .Values.replicaCount }}
+  podManagementPolicy: OrderedReady
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "dba-toolbox.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "dba-toolbox.labels" . | nindent 8 }}
+      annotations:
+        checksum/connections: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum | quote }}
+        checksum/extra-objects: {{ toYaml .Values.extraObjects | sha256sum | quote }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: toolbox
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          env:
+            - name: HOME
+              value: {{ printf "%s/home" .Values.persistence.config.mountPath | quote }}
+            - name: MC_CONFIG_DIR
+              value: {{ printf "%s/mc" .Values.persistence.config.mountPath | quote }}
+            - name: PGSERVICEFILE
+              value: {{ printf "%s/home/.pg_service.conf" .Values.persistence.config.mountPath | quote }}
+            - name: PGPASSFILE
+              value: {{ printf "%s/home/.pgpass" .Values.persistence.config.mountPath | quote }}
+            - name: S3_BUCKETS_FILE
+              value: {{ printf "%s/home/.s3-buckets" .Values.persistence.config.mountPath | quote }}
+            {{- $root := . }}
+            {{- range $index, $name := keys .Values.connections.minio | sortAlpha }}
+            {{- $connection := index $root.Values.connections.minio $name }}
+            {{- if $connection.existingSecret.name }}
+            {{- range $field := list "endpoint" "accessKey" "secretKey" "bucket" }}
+            {{- $key := index $connection.existingSecret (printf "%sKey" $field) }}
+            {{- if $key }}
+            - name: MINIO_{{ $index }}_{{ upper (snakecase $field) }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $connection.existingSecret.name | quote }}
+                  key: {{ $key | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- range $index, $name := keys .Values.connections.postgres | sortAlpha }}
+            {{- $connection := index $root.Values.connections.postgres $name }}
+            {{- if $connection.existingSecret.name }}
+            {{- range $field := list "host" "database" "user" "password" }}
+            {{- $key := index $connection.existingSecret (printf "%sKey" $field) }}
+            {{- if $key }}
+            - name: POSTGRES_{{ $index }}_{{ upper (snakecase $field) }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $connection.existingSecret.name | quote }}
+                  key: {{ $key | quote }}
+            {{- end }}
+            {{- end }}
+            {{- $connectionStringKey := default $connection.connectionStringKey $connection.existingSecret.connectingStringKey }}
+            {{- if $connectionStringKey }}
+            - name: POSTGRES_{{ $index }}_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $connection.existingSecret.name | quote }}
+                  key: {{ $connectionStringKey | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ printf "%s-connections" (include "dba-toolbox.fullname" .) }}
+          volumeMounts:
+            - name: toolbox-work
+              mountPath: {{ .Values.persistence.work.mountPath }}
+            - name: toolbox-config
+              mountPath: {{ .Values.persistence.config.mountPath }}
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        {{- if not .Values.persistence.work.enabled }}
+        - name: toolbox-work
+          emptyDir: {}
+        {{- end }}
+        {{- if not .Values.persistence.config.enabled }}
+        - name: toolbox-config
+          emptyDir: {}
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if or .Values.persistence.work.enabled .Values.persistence.config.enabled }}
+  volumeClaimTemplates:
+    {{- if .Values.persistence.work.enabled }}
+    - metadata:
+        name: toolbox-work
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.work.accessModes | nindent 10 }}
+        {{- with .Values.persistence.work.storageClassName }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.work.size | quote }}
+    {{- end }}
+    {{- if .Values.persistence.config.enabled }}
+    - metadata:
+        name: toolbox-config
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.config.accessModes | nindent 10 }}
+        {{- with .Values.persistence.config.storageClassName }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.config.size | quote }}
+    {{- end }}
+  {{- end }}

@@ -43,7 +43,7 @@ spec:
                 name: dba-toolbox-connections
           volumeMounts:
             - name: toolbox-work
-              mountPath: /backup
+              mountPath: /work
   volumeClaimTemplates:
     - metadata:
         name: toolbox-work

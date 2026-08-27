@@ -1,0 +1,62 @@
+replicaCount: 1
+
+image:
+  repository: registry.example.com/backup-tools
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  port: 8080
+
+persistence:
+  work:
+    enabled: true
+    size: 100Gi
+    accessModes:
+      - ReadWriteMany
+    storageClassName: rook-cephfs
+    mountPath: /work
+  # Configuration is separate so work PVC replacement does not remove mappings.
+  config:
+    enabled: true
+    size: 1Gi
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: rook-cephfs
+    mountPath: /config
+
+connections:
+  # Use the map key as the default alias/service name. See README.md for
+  # direct and Secret-backed connection examples.
+  minio: {}
+  postgres: {}
+# Arbitrary Kubernetes objects deployed with the chart. This is useful for
+# native Secret manifests containing connection credentials.
+extraObjects: []
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
