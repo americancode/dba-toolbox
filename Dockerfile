@@ -11,7 +11,6 @@ RUN apk upgrade --no-cache \
       bash \
       ca-certificates \
       coreutils \
-      gzip \
       minio-client \
       postgresql-client \
       tar \

@@ -14,6 +14,9 @@ Kubernetes dynamically provisions the `/work` volume through the
 - `psql`, `pg_dump`, and other PostgreSQL client tools
 - `tar`, `gzip`, `coreutils`, and timezone data
 
+The `gzip` and `gunzip` commands are provided by Alpine's BusyBox applets;
+the image does not install the separate GNU gzip package.
+
 Azure CLI is intentionally not included.
 
 ## Kubernetes Resources
