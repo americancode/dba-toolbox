@@ -1,0 +1,11 @@
+{{- if .Values.caBundle }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dba-toolbox.fullname" . }}-ca-bundle
+  labels:
+    {{- include "dba-toolbox.labels" . | nindent 4 }}
+data:
+  ca-bundle.crt: |
+{{ .Values.caBundle | nindent 4 }}
+{{- end }}

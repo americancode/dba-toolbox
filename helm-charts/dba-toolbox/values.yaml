@@ -5,6 +5,10 @@ image:
   tag: latest
   pullPolicy: IfNotPresent
 
+# Optional PEM-encoded CA bundle. Include every root CA needed by the
+# connected services, including public roots if those services need them.
+caBundle: ""
+
 service:
   port: 8080
 

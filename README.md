@@ -62,6 +62,45 @@ POSTGRES_1_*
 POSTGRES_2_*
 ```
 
+## Custom CA bundle
+
+The chart accepts a complete PEM-encoded CA bundle through one `caBundle`
+value. It is optional and is mounted read-only, so it works with the image's
+non-root user and restricted Pod Security Admission settings:
+
+```yaml
+caBundle: |
+  -----BEGIN CERTIFICATE-----
+  MIID...
+  -----END CERTIFICATE-----
+```
+
+Use `BEGIN CERTIFICATE` blocks for CA certificates; a public-key-only PEM is
+not a CA certificate. Include the public roots required by your endpoints as
+well as private or corporate roots, because this bundle is used as the active
+trust bundle for clients that honor `SSL_CERT_FILE`.
+
+When configured, the chart:
+
+- creates a ConfigMap containing the bundle;
+- mounts it at `/etc/ssl/custom/ca-bundle.crt` and in MinIO's
+  `$MC_CONFIG_DIR/certs/CAs` directory;
+- sets `SSL_CERT_FILE` and PostgreSQL's `PGSSLROOTCERT`; and
+- changes the pod template checksum so bundle changes roll the StatefulSet.
+
+Example:
+
+```sh
+helm upgrade --install dba-toolbox ./helm-charts/dba-toolbox \
+  --set-file caBundle=corporate-ca-bundle.pem
+```
+
+The bundle is stored in a ConfigMap because CA certificates are public
+material. If organizational policy requires Secret storage, use your platform
+secret-management or GitOps tooling to generate the ConfigMap rather than
+putting private keys in this value; private keys must never be included in the
+bundle.
+
 You can either set `MINIO_COUNT` / `POSTGRES_COUNT`, or omit the counts and let
 the entrypoint discover configured indexes from the environment.
 

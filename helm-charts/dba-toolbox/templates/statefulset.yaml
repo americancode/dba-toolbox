@@ -22,6 +22,7 @@ spec:
       annotations:
         checksum/connections: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum | quote }}
         checksum/extra-objects: {{ toYaml .Values.extraObjects | sha256sum | quote }}
+        checksum/ca-bundle: {{ .Values.caBundle | sha256sum | quote }}
     spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
@@ -44,6 +45,12 @@ spec:
               value: {{ printf "%s/home/.pgpass" .Values.persistence.config.mountPath | quote }}
             - name: S3_BUCKETS_FILE
               value: {{ printf "%s/home/.s3-buckets" .Values.persistence.config.mountPath | quote }}
+            {{- if .Values.caBundle }}
+            - name: SSL_CERT_FILE
+              value: /etc/ssl/custom/ca-bundle.crt
+            - name: PGSSLROOTCERT
+              value: /etc/ssl/custom/ca-bundle.crt
+            {{- end }}
             {{- $root := . }}
             {{- range $index, $name := keys .Values.connections.minio | sortAlpha }}
             {{- $connection := index $root.Values.connections.minio $name }}
@@ -114,6 +121,14 @@ spec:
               mountPath: {{ .Values.persistence.work.mountPath }}
             - name: toolbox-config
               mountPath: {{ .Values.persistence.config.mountPath }}
+            {{- if .Values.caBundle }}
+            - name: custom-ca
+              mountPath: /etc/ssl/custom
+              readOnly: true
+            - name: custom-ca
+              mountPath: {{ printf "%s/mc/certs/CAs" .Values.persistence.config.mountPath }}
+              readOnly: true
+            {{- end }}
             - name: tmp
               mountPath: /tmp
       volumes:
@@ -127,6 +142,14 @@ spec:
         {{- end }}
         - name: tmp
           emptyDir: {}
+        {{- if .Values.caBundle }}
+        - name: custom-ca
+          configMap:
+            name: {{ include "dba-toolbox.fullname" . }}-ca-bundle
+            items:
+              - key: ca-bundle.crt
+                path: ca-bundle.crt
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
