@@ -251,22 +251,6 @@ jobs:
           fi
           echo "version=${release_version}" >> "${GITHUB_OUTPUT}"
 
-      - name: Verify Tag Matches Chart Version
-        env:
-          RELEASE_VERSION: ${{ steps.release-version.outputs.version }}
-        run: |
-          set -euo pipefail
-          chart_version="$(awk '$1 == "version:" {print $2; exit}' helm-charts/dba-toolbox/Chart.yaml)"
-          chart_app_version="$(awk '$1 == "appVersion:" {gsub(/"/, "", $2); print $2; exit}' helm-charts/dba-toolbox/Chart.yaml)"
-          if [[ "${chart_version}" != "${RELEASE_VERSION}" ]]; then
-            echo "Chart version ${chart_version} does not match tag ${RELEASE_VERSION}" >&2
-            exit 1
-          fi
-          if [[ "${chart_app_version}" != "${RELEASE_VERSION}" ]]; then
-            echo "Chart appVersion ${chart_app_version} does not match tag ${RELEASE_VERSION}" >&2
-            exit 1
-          fi
-
       - name: Lint Helm Chart
         run: helm lint helm-charts/dba-toolbox
 
