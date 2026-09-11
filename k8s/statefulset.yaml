@@ -28,6 +28,7 @@ spec:
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
@@ -44,6 +45,15 @@ spec:
           volumeMounts:
             - name: toolbox-work
               mountPath: /work
+            - name: toolbox-home
+              mountPath: /home/backup
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: toolbox-home
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
   volumeClaimTemplates:
     - metadata:
         name: toolbox-work
