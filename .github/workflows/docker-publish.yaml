@@ -209,6 +209,7 @@ jobs:
           ARM64_DIGEST: ${{ needs.build-arm64.outputs.digest }}
           REF_NAME: ${{ github.ref_name }}
         run: |
+          set -euo pipefail
           VERSION="${REF_NAME#v}"
           if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "Release tag must be semver x.y.z or vx.y.z with an optional prerelease suffix: ${REF_NAME}" >&2
@@ -216,7 +217,14 @@ jobs:
           fi
           docker buildx imagetools create --tag "${IMAGE}:${VERSION}" \
             "${IMAGE}@${AMD64_DIGEST}" "${IMAGE}@${ARM64_DIGEST}"
-          digest="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" | awk '/^Digest:/ { print $2; exit }')"
+          digest=""
+          for attempt in {1..10}; do
+            if digest="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" 2>/dev/null | awk '/^Digest:/ { print $2; exit }')" && [[ -n "${digest}" ]]; then
+              break
+            fi
+            echo "Waiting for ${IMAGE}:${VERSION} to become readable (attempt ${attempt}/10)..."
+            sleep 3
+          done
           test -n "${digest}"
           if [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             docker buildx imagetools create --tag "${IMAGE}:latest" "${IMAGE}@${digest}"
