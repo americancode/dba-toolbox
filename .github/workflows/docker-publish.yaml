@@ -238,17 +238,26 @@ jobs:
       - name: Set Up Helm
         uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
 
+      - name: Normalize Release Version
+        id: release-version
+        env:
+          RAW_RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          release_version="${RAW_RELEASE_VERSION#v}"
+          if [[ ! "${RAW_RELEASE_VERSION}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag must be a semantic version such as 0.0.7 or v0.0.7: ${RAW_RELEASE_VERSION}" >&2
+            exit 1
+          fi
+          echo "version=${release_version}" >> "${GITHUB_OUTPUT}"
+
       - name: Verify Tag Matches Chart Version
         env:
-          RELEASE_VERSION: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ steps.release-version.outputs.version }}
         run: |
           set -euo pipefail
           chart_version="$(awk '$1 == "version:" {print $2; exit}' helm-charts/dba-toolbox/Chart.yaml)"
           chart_app_version="$(awk '$1 == "appVersion:" {gsub(/"/, "", $2); print $2; exit}' helm-charts/dba-toolbox/Chart.yaml)"
-          if [[ ! "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Tag must be a bare semantic version such as 1.2.3: ${RELEASE_VERSION}" >&2
-            exit 1
-          fi
           if [[ "${chart_version}" != "${RELEASE_VERSION}" ]]; then
             echo "Chart version ${chart_version} does not match tag ${RELEASE_VERSION}" >&2
             exit 1
@@ -268,11 +277,11 @@ jobs:
 
       - name: Package Helm Chart
         env:
-          RELEASE_VERSION: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ steps.release-version.outputs.version }}
         run: helm package helm-charts/dba-toolbox --version "${RELEASE_VERSION}" --app-version "${RELEASE_VERSION}"
 
       - name: Publish Helm Chart
         env:
           CHART_REPOSITORY: oci://ghcr.io/${{ github.repository_owner }}/helm-charts
-          RELEASE_VERSION: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ steps.release-version.outputs.version }}
         run: helm push "dba-toolbox-${RELEASE_VERSION}.tgz" "${CHART_REPOSITORY}"
