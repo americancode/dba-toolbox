@@ -5,6 +5,11 @@ log() {
   printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2
 }
 
+# Refresh certificates at startup so certificates mounted into the container
+# are available to PostgreSQL, MinIO, and other TLS clients. The image grants
+# the backup user ownership of /etc/ssl/certs during the image build.
+update-ca-certificates
+
 getenv() {
   local name="$1"
   printf '%s' "${!name-}"

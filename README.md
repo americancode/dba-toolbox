@@ -67,15 +67,26 @@ POSTGRES_2_*
 
 ## Custom CA bundle
 
-The chart accepts a complete PEM-encoded CA bundle through one `caBundle`
-value. It is optional and is mounted read-only, so it works with the image's
-non-root user and restricted Pod Security Admission settings:
+The chart accepts a complete PEM-encoded CA bundle through `caBundle`, or
+multiple certificate keys from existing ConfigMaps and Secrets:
 
 ```yaml
 caBundle: |
   -----BEGIN CERTIFICATE-----
   MIID...
   -----END CERTIFICATE-----
+```
+
+Example using multiple external sources:
+
+```yaml
+caSources:
+  - type: configMap
+    name: company-root-ca
+    key: root.crt
+  - type: secret
+    name: partner-root-ca
+    key: partner.crt
 ```
 
 Use `BEGIN CERTIFICATE` blocks for CA certificates; a public-key-only PEM is
@@ -85,11 +96,14 @@ trust bundle for clients that honor `SSL_CERT_FILE`.
 
 When configured, the chart:
 
-- creates a ConfigMap containing the bundle;
-- mounts it at `/etc/ssl/custom/ca-bundle.crt` and in MinIO's
+- creates a ConfigMap containing `caBundle`, when that value is used, and
+  projects all configured sources into the certificate directory;
+- mounts the sources at `/usr/local/share/ca-certificates` and in MinIO's
   `$MC_CONFIG_DIR/certs/CAs` directory;
-- sets `SSL_CERT_FILE` and PostgreSQL's `PGSSLROOTCERT`; and
-- changes the pod template checksum so bundle changes roll the StatefulSet.
+- runs `update-ca-certificates` during container startup as the unprivileged
+  `backup` user, updating the writable `/etc/ssl/certs` directory; and
+- sets `SSL_CERT_FILE` and PostgreSQL's `PGSSLROOTCERT` to the regenerated
+  `/etc/ssl/certs/ca-certificates.crt` bundle.
 
 Example:
 

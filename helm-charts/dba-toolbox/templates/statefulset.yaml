@@ -1,3 +1,12 @@
+{{- $caEnabled := or .Values.caBundle (gt (len .Values.caSources) 0) }}
+{{- range $index, $source := .Values.caSources }}
+{{- if or (not $source.type) (not $source.name) (not $source.key) }}
+{{- fail (printf "caSources[%d] requires type, name, and key" $index) }}
+{{- end }}
+{{- if and (ne $source.type "configMap") (ne $source.type "secret") }}
+{{- fail (printf "caSources[%d].type must be configMap or secret" $index) }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -22,7 +31,7 @@ spec:
       annotations:
         checksum/connections: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum | quote }}
         checksum/extra-objects: {{ toYaml .Values.extraObjects | sha256sum | quote }}
-        checksum/ca-bundle: {{ .Values.caBundle | sha256sum | quote }}
+        checksum/ca-bundle: {{ printf "%s/%s" .Values.caBundle (toYaml .Values.caSources) | sha256sum | quote }}
     spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
@@ -45,11 +54,11 @@ spec:
               value: {{ printf "%s/home/.pgpass" .Values.persistence.config.mountPath | quote }}
             - name: S3_BUCKETS_FILE
               value: {{ printf "%s/home/.s3-buckets" .Values.persistence.config.mountPath | quote }}
-            {{- if .Values.caBundle }}
+            {{- if $caEnabled }}
             - name: SSL_CERT_FILE
-              value: /etc/ssl/custom/ca-bundle.crt
+              value: /etc/ssl/certs/ca-certificates.crt
             - name: PGSSLROOTCERT
-              value: /etc/ssl/custom/ca-bundle.crt
+              value: /etc/ssl/certs/ca-certificates.crt
             {{- end }}
             {{- $root := . }}
             {{- range $index, $name := keys .Values.connections.minio | sortAlpha }}
@@ -121,9 +130,9 @@ spec:
               mountPath: {{ .Values.persistence.work.mountPath }}
             - name: toolbox-config
               mountPath: {{ .Values.persistence.config.mountPath }}
-            {{- if .Values.caBundle }}
+            {{- if $caEnabled }}
             - name: custom-ca
-              mountPath: /etc/ssl/custom
+              mountPath: /usr/local/share/ca-certificates
               readOnly: true
             - name: custom-ca
               mountPath: {{ printf "%s/mc/certs/CAs" .Values.persistence.config.mountPath }}
@@ -142,13 +151,24 @@ spec:
         {{- end }}
         - name: tmp
           emptyDir: {}
-        {{- if .Values.caBundle }}
+        {{- if $caEnabled }}
         - name: custom-ca
-          configMap:
-            name: {{ include "dba-toolbox.fullname" . }}-ca-bundle
-            items:
-              - key: ca-bundle.crt
-                path: ca-bundle.crt
+          projected:
+            sources:
+              {{- if .Values.caBundle }}
+              - configMap:
+                  name: {{ include "dba-toolbox.fullname" . }}-ca-bundle
+                  items:
+                    - key: ca-bundle.crt
+                      path: inline-ca-bundle.crt
+              {{- end }}
+              {{- range $index, $source := .Values.caSources }}
+              - {{ $source.type }}:
+                  name: {{ $source.name | quote }}
+                  items:
+                    - key: {{ $source.key | quote }}
+                      path: {{ printf "external-%d.crt" $index }}
+              {{- end }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

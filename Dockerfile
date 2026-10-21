@@ -19,7 +19,10 @@ RUN apk upgrade --no-cache \
     && adduser -S -D -H -u 65532 -G backup -h /home/backup -s /sbin/nologin backup \
     && mkdir -p /work /home/backup \
     && chown -R backup:backup /work /home/backup \
-    && if command -v mcli >/dev/null 2>&1 && ! command -v mc >/dev/null 2>&1; then ln -s /usr/bin/mcli /usr/local/bin/mc; fi
+    && if command -v mcli >/dev/null 2>&1 && ! command -v mc >/dev/null 2>&1; then ln -s /usr/bin/mcli /usr/local/bin/mc; fi \
+    && update-ca-certificates \
+    && chown -R backup:backup /etc/ssl/certs \
+    && chmod -R u+rwX /etc/ssl/certs
 
 COPY scripts/toolbox-entrypoint.sh /usr/local/bin/toolbox-entrypoint.sh
 
