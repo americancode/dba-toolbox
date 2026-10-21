@@ -1,0 +1,4 @@
+# The non-root backup user must refresh the CA store at startup. The image
+# grants that user write access to /etc/ssl/certs, so the chart intentionally
+# keeps the root filesystem writable for this specific runtime operation.
+KSV-0014
