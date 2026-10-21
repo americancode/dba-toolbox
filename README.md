@@ -83,11 +83,14 @@ Example using multiple external sources:
 caSources:
   - type: configMap
     name: company-root-ca
-    key: root.crt
   - type: secret
     name: partner-root-ca
     key: partner.crt
 ```
+
+`key` is optional. When omitted, every key/file in that ConfigMap or Secret is
+projected into the certificate directory; when provided, only that key is
+projected.
 
 Use `BEGIN CERTIFICATE` blocks for CA certificates; a public-key-only PEM is
 not a CA certificate. Include the public roots required by your endpoints as

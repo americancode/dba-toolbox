@@ -1,7 +1,7 @@
 {{- $caEnabled := or .Values.caBundle (gt (len .Values.caSources) 0) }}
 {{- range $index, $source := .Values.caSources }}
-{{- if or (not $source.type) (not $source.name) (not $source.key) }}
-{{- fail (printf "caSources[%d] requires type, name, and key" $index) }}
+{{- if or (not $source.type) (not $source.name) }}
+{{- fail (printf "caSources[%d] requires type and name" $index) }}
 {{- end }}
 {{- if and (ne $source.type "configMap") (ne $source.type "secret") }}
 {{- fail (printf "caSources[%d].type must be configMap or secret" $index) }}
@@ -165,9 +165,11 @@ spec:
               {{- range $index, $source := .Values.caSources }}
               - {{ $source.type }}:
                   name: {{ $source.name | quote }}
+                  {{- if $source.key }}
                   items:
                     - key: {{ $source.key | quote }}
                       path: {{ printf "external-%d.crt" $index }}
+                  {{- end }}
               {{- end }}
         {{- end }}
       {{- with .Values.nodeSelector }}
