@@ -101,8 +101,10 @@ When configured, the chart:
 
 - creates a ConfigMap containing `caBundle`, when that value is used, and
   projects all configured sources into the certificate directory;
-- mounts the sources at `/usr/local/share/ca-certificates` and in MinIO's
+- mounts the sources at `/etc/dba-toolbox/ca-sources` and in MinIO's
   `$MC_CONFIG_DIR/certs/CAs` directory;
+- splits PEM bundles containing multiple certificates into individual files
+  under Alpine's `/usr/local/share/ca-certificates` directory;
 - runs `update-ca-certificates` during container startup as the unprivileged
   `backup` user, updating the writable `/etc/ssl/certs` directory; and
 - sets `SSL_CERT_FILE` and PostgreSQL's `PGSSLROOTCERT` to the regenerated

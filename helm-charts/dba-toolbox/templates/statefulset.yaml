@@ -132,7 +132,7 @@ spec:
               mountPath: {{ .Values.persistence.config.mountPath }}
             {{- if $caEnabled }}
             - name: custom-ca
-              mountPath: /usr/local/share/ca-certificates
+              mountPath: /etc/dba-toolbox/ca-sources
               readOnly: true
             - name: custom-ca
               mountPath: {{ printf "%s/mc/certs/CAs" .Values.persistence.config.mountPath }}

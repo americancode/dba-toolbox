@@ -5,9 +5,57 @@ log() {
   printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2
 }
 
+prepare_custom_ca_certificates() {
+  local source_dir="/etc/dba-toolbox/ca-sources"
+  local target_dir="/usr/local/share/ca-certificates"
+  local source_file
+  local source_name
+  local certificate_count=0
+  local source_certificate_count
+
+  mkdir -p "$target_dir"
+  find "$target_dir" -maxdepth 1 -type f -name 'dba-toolbox-*.crt' -delete
+
+  [ -d "$source_dir" ] || return 0
+
+  while IFS= read -r -d '' source_file; do
+    source_name="$(basename "$source_file")"
+    source_certificate_count=0
+    while IFS= read -r certificate_file; do
+      [ -n "$certificate_file" ] || continue
+      certificate_count=$((certificate_count + 1))
+      source_certificate_count=$((source_certificate_count + 1))
+      cp "$certificate_file" \
+        "${target_dir}/dba-toolbox-${source_name%.crt}-${certificate_count}.crt"
+      rm -f "$certificate_file"
+    done < <(
+      awk -v output_dir="$target_dir" -v source_name="$source_name" '
+        /-----BEGIN CERTIFICATE-----/ {
+          certificate++
+          output = sprintf("%s/.dba-toolbox-%s.%d.crt", output_dir, source_name, certificate)
+          inside = 1
+        }
+        inside {
+          print > output
+        }
+        /-----END CERTIFICATE-----/ {
+          close(output)
+          print output
+          inside = 0
+        }
+      ' "$source_file"
+    )
+
+    if [ "$source_certificate_count" -eq 0 ]; then
+      log "WARNING: No PEM certificates found in ${source_file}"
+    fi
+  done < <(find "$source_dir" -type f -print0)
+}
+
 # Refresh certificates at startup so certificates mounted into the container
 # are available to PostgreSQL, MinIO, and other TLS clients. The image grants
 # the backup user ownership of /etc/ssl/certs during the image build.
+prepare_custom_ca_certificates
 update-ca-certificates
 
 getenv() {
