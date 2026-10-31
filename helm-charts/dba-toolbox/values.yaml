@@ -60,11 +60,14 @@ podSecurityContext:
   runAsUser: 65532
   runAsGroup: 65532
   fsGroup: 65532
+  # Applies to volume types/drivers that support kubelet-managed fsGroup.
+  fsGroupChangePolicy: Always
   seccompProfile:
     type: RuntimeDefault
 
 containerSecurityContext:
   allowPrivilegeEscalation: false
+  # Restricted PSA permits this; the non-root user refreshes the image's CA store.
   readOnlyRootFilesystem: false
   capabilities:
     drop:

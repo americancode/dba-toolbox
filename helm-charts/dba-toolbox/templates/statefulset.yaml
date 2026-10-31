@@ -134,9 +134,6 @@ spec:
             - name: custom-ca
               mountPath: /etc/dba-toolbox/ca-sources
               readOnly: true
-            - name: custom-ca
-              mountPath: {{ printf "%s/mc/certs/CAs" .Values.persistence.config.mountPath }}
-              readOnly: true
             {{- end }}
             - name: tmp
               mountPath: /tmp

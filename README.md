@@ -101,10 +101,10 @@ When configured, the chart:
 
 - creates a ConfigMap containing `caBundle`, when that value is used, and
   projects all configured sources into the certificate directory;
-- mounts the sources at `/etc/dba-toolbox/ca-sources` and in MinIO's
-  `$MC_CONFIG_DIR/certs/CAs` directory;
+- mounts the sources read-only at `/etc/dba-toolbox/ca-sources`;
 - splits PEM bundles containing multiple certificates into individual files
-  under Alpine's `/usr/local/share/ca-certificates` directory;
+  under Alpine's `/usr/local/share/ca-certificates` directory and copies them
+  into the writable `$MC_CONFIG_DIR/certs/CAs` directory as the application user;
 - runs `update-ca-certificates` during container startup as the unprivileged
   `backup` user, updating the writable `/etc/ssl/certs` directory; and
 - sets `SSL_CERT_FILE` and PostgreSQL's `PGSSLROOTCERT` to the regenerated
@@ -244,6 +244,19 @@ claims by default:
   PostgreSQL client files. Both claims are StatefulSet volume-claim templates,
   and the StatefulSet retention policy keeps them when the workload is deleted
   or scaled down.
+
+The default pod meets Restricted Pod Security requirements: UID/GID 65532,
+`runAsNonRoot`, `allowPrivilegeEscalation: false`, all capabilities dropped,
+and `RuntimeDefault` seccomp. There are no root init containers. The root
+filesystem remains writable so the non-root entrypoint can refresh the CA store;
+Restricted PSA does not require a read-only root filesystem.
+
+Volume access relies on `fsGroup: 65532` and `fsGroupChangePolicy: Always` where
+supported by the storage driver. Storage must provide group-writable volumes.
+CA sources are mounted outside the PVC; the application creates its own
+`mc/certs/CAs` directories and copies certificates there. This avoids a nested
+CA mount creating root-owned parents inside the MinIO configuration directory
+on first startup. No privileged permission-repair hook is used.
 
 The configuration Secret remains the source of truth. On every startup the
 entrypoint reconciles managed aliases and atomically regenerates PostgreSQL

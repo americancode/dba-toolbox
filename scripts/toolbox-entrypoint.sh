@@ -8,13 +8,15 @@ log() {
 prepare_custom_ca_certificates() {
   local source_dir="/etc/dba-toolbox/ca-sources"
   local target_dir="/usr/local/share/ca-certificates"
+  local mc_ca_dir="${MC_CONFIG_DIR:-$HOME/.mc}/certs/CAs"
   local source_file
   local source_name
   local certificate_count=0
   local source_certificate_count
 
-  mkdir -p "$target_dir"
+  mkdir -p "$target_dir" "$mc_ca_dir"
   find "$target_dir" -maxdepth 1 -type f -name 'dba-toolbox-*.crt' -delete
+  find "$mc_ca_dir" -maxdepth 1 -type f -name 'dba-toolbox-*.crt' -delete
 
   [ -d "$source_dir" ] || return 0
 
@@ -27,6 +29,8 @@ prepare_custom_ca_certificates() {
       source_certificate_count=$((source_certificate_count + 1))
       cp "$certificate_file" \
         "${target_dir}/dba-toolbox-${source_name%.crt}-${certificate_count}.crt"
+      cp "$certificate_file" \
+        "${mc_ca_dir}/dba-toolbox-${source_name%.crt}-${certificate_count}.crt"
       rm -f "$certificate_file"
     done < <(
       awk -v output_dir="$target_dir" -v source_name="$source_name" '
